@@ -1,39 +1,61 @@
 # 河南大学校园助手
 
-为河南大学学生提供教务系统课表查询和图书馆座位预约的一体化解决方案。
+为河南大学学生提供课表查询、图书馆预约、研讨室预约等能力，当前仓库包含多种接入形态，可按你的客户端和使用方式选择。
 
-## 项目分支
+## 版本入口
 
-本项目提供两种不同的实现方式，分别位于不同的分支：
+### Langbot 插件版
+**分支**: [`langbot-plugin`](https://github.com/jry21223/HENU_Assistant/tree/langbot-plugin)
+- 适用于 Langbot 插件生态
+- 已封装为 Langbot `Tool` 组件
+- 支持按不同 QQ 账号隔离保存河大学号和密码
+- 适合 Langbot 机器人直接接入校园能力
 
-### 🔧 MCP服务器版本
-**分支**: [`mcp-server`](https://github.com/jry21223/HENU_MCP/tree/mcp-server)
-- 基于Model Context Protocol (MCP)
-- 适用于支持MCP协议的AI客户端
-- 提供完整的工具集和API接口
+### MCP 服务器版
+**分支**: [`mcp-server`](https://github.com/jry21223/HENU_Assistant/tree/mcp-server)
+- 基于 Model Context Protocol (MCP)
+- 适用于支持 MCP 协议的 AI 客户端
+- 提供完整工具集和 API 接口
 - 适合开发者和高级用户
 
-### 💬 OpenClaw Skill版本
-**分支**: [`openclaw-skill`](https://github.com/jry21223/HENU_MCP/tree/openclaw-skill)
-- 专为OpenClaw设计的skill
+### OpenClaw Skill 版
+**分支**: [`openclaw-skill`](https://github.com/jry21223/HENU_Assistant/tree/openclaw-skill)
+- 专为 OpenClaw 设计的 skill
 - 支持自然语言交互
 - 零配置，开箱即用
 - 适合普通用户日常使用
 
-## 如何选择和使用
+## 如何选择
 
-### 使用MCP服务器版本
+| 形态 | 分支 | 适用对象 | 特点 |
+| --- | --- | --- | --- |
+| Langbot 插件 | `langbot-plugin` | Langbot 用户 | 支持 Tool 调用，支持按 QQ 隔离账号配置 |
+| MCP 服务器 | `mcp-server` | MCP 客户端 / 开发者 | 接口完整，适合集成 |
+| OpenClaw Skill | `openclaw-skill` | OpenClaw 用户 | 对话式使用，部署简单 |
+
+## 快速开始
+
+### 使用 Langbot 插件版
 ```bash
-git clone -b mcp-server https://github.com/jry21223/HENU_MCP.git
-cd HENU_MCP
+git clone -b langbot-plugin https://github.com/jry21223/HENU_Assistant.git
+cd HENU_Assistant
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/lbp build
+```
+
+### 使用 MCP 服务器版
+```bash
+git clone -b mcp-server https://github.com/jry21223/HENU_Assistant.git
+cd HENU_Assistant
 pip install -r requirements.txt
 python mcp_server.py
 ```
 
-### 使用OpenClaw Skill版本
+### 使用 OpenClaw Skill 版
 ```bash
-git clone -b openclaw-skill https://github.com/jry21223/HENU_MCP.git
-cp -r HENU_MCP ~/.openclaw/workspace/skills/henu_campus_assistant
+git clone -b openclaw-skill https://github.com/jry21223/HENU_Assistant.git
+cp -r HENU_Assistant ~/.openclaw/workspace/skills/henu_campus_assistant
 cd ~/.openclaw/workspace/skills/henu_campus_assistant
 pip install -r requirements.txt
 ```
@@ -52,6 +74,12 @@ pip install -r requirements.txt
 - 一键取消预约
 - 支持多个图书馆区域
 
+### 🧩 多平台接入
+- 支持 Langbot 插件
+- 支持 MCP 客户端
+- 支持 OpenClaw Skill
+- 可按不同场景选择不同接入方式
+
 ### 🔐 安全特性
 - 本地加密存储账号信息
 - 会话保持，减少重复登录
@@ -60,13 +88,14 @@ pip install -r requirements.txt
 
 ## 版本对比
 
-| 特性 | MCP服务器版本 | OpenClaw Skill版本 |
-|------|---------------|-------------------|
-| 部署复杂度 | 中等 | 简单 |
-| 使用方式 | 工具调用 | 自然对话 |
-| 客户端支持 | MCP兼容客户端 | OpenClaw |
-| 功能完整性 | 完整 | 完整 |
-| 适用场景 | 开发集成 | 日常使用 |
+| 特性 | Langbot 插件版 | MCP 服务器版 | OpenClaw Skill 版 |
+| --- | --- | --- | --- |
+| 部署复杂度 | 中等 | 中等 | 简单 |
+| 使用方式 | Tool 调用 / 机器人集成 | 工具调用 | 自然对话 |
+| 客户端支持 | Langbot | MCP 兼容客户端 | OpenClaw |
+| 账号隔离 | 支持按 QQ 隔离 | 默认单账号本地存储 | 由宿主环境决定 |
+| 功能完整性 | 完整 | 完整 | 完整 |
+| 适用场景 | Langbot 接入 | 开发集成 | 日常使用 |
 
 ## 系统要求
 
@@ -94,5 +123,6 @@ pip install -r requirements.txt
 
 ## 更新日志
 
-- **v2.0.0** - 添加OpenClaw Skill支持，重构项目结构
-- **v1.0.0** - 初始版本，支持MCP协议
+- **v3.0.0** - 添加 Langbot 插件版，支持按 QQ 隔离保存账号配置
+- **v2.0.0** - 添加 OpenClaw Skill 支持，重构项目结构
+- **v1.0.0** - 初始版本，支持 MCP 协议
