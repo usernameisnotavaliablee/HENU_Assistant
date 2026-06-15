@@ -48,6 +48,10 @@ cp -r henu_campus_assistant ~/.openclaw/workspace/skills/
 - 研讨室筛选、房间详情、分组、预约、签到、取消
 - 河宝社区请假、签到、查寝、活动、信息收集查询
 
+## 文档
+
+- [河南大学选课接口记录](docs/course-selection-api.md)
+
 ## 说明
 
 - 需要河南大学学生账号和可访问校园相关系统的网络环境。
