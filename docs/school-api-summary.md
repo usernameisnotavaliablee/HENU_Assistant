@@ -1,7 +1,7 @@
 # 河南大学校园相关 API 汇总（主分支 Docs）
 
 本文档用于把仓库内出现的“校园相关 API 接口”集中到一个地方，方便对接与维护。  
-仓库为多变体并行结构（`mcp-server` / `openclaw-skill` / `langbot-plugin`），但下述网络接口在三套代码中基本共享同一套上游实现。
+仓库为多变体并行结构（`mcp-server` / `agent-skill` / `langbot-plugin`），但下述网络接口在三套代码中基本共享同一套上游实现。
 
 > 说明：本文件按服务域名分组；每个区域都对应仓库里的真实调用点，建议对接时以该文件为入口清单再回溯到对应实现文件。
 
@@ -135,4 +135,4 @@ CAS 登录入口（多系统共用）:
   - `mcp-server/campus_core/seminar.py`
   - `mcp-server/campus_core/hebao.py`
 - 变体一致性：
-  - `openclaw-skill` 与 `langbot-plugin` 下均为同源实现（路径与接口语义一致），建议只在本汇总文件维护改动，避免三套同时维护造成漂移。
+  - `agent-skill` 与 `langbot-plugin` 下均为同源实现（路径与接口语义一致），建议只在本汇总文件维护改动，避免三套同时维护造成漂移。

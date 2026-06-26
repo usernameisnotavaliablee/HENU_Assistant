@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | Langbot 插件 | `langbot-plugin` | 接入 Langbot 机器人，按 QQ 隔离账号数据 |
 | MCP 服务器 | `mcp-server` | 接入支持 MCP 的客户端或做二次集成 |
-| OpenClaw Skill | `openclaw-skill` | 在 OpenClaw 中用自然语言调用 |
+| Agent Skill | `agent-skill` | 在 Agent Skill 中用自然语言调用 |
 
 ## 快速开始
 
@@ -41,10 +41,10 @@ pip install -r requirements.txt
 python3 mcp_server.py --transport stdio
 ```
 
-OpenClaw Skill：
+Agent Skill：
 
 ```bash
-git clone -b openclaw-skill https://github.com/jry21223/HENU_Assistant.git henu_campus_assistant
+git clone -b agent-skill https://github.com/jry21223/HENU_Assistant.git henu_campus_assistant
 cp -r henu_campus_assistant ~/.openclaw/workspace/skills/
 ```
 
