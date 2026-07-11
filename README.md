@@ -56,6 +56,10 @@ cp -r henu_campus_assistant ~/.openclaw/workspace/skills/
 - 研讨室筛选、房间详情、分组、预约、签到、取消
 - 河宝社区请假、签到、查寝、活动、信息收集查询
 
+## 登录策略
+
+教务登录优先复用或登录 IDS 统一认证；仅在 IDS、Service 跳转、网络或验证码风控失败时，自动尝试一次 xk Kingo 独立登录。IDS 模式支持跨服务 SSO；Kingo 是降级通道，只保证课表、选课状态和空教室等 xk 能力，不为图书馆、研讨室或河宝生成、覆盖 CAS Cookie。遇到验证码会返回 `captcha_required`，不会识别、绕过或循环重试；相关工具通过 `auth` 对象公开认证模式和能力边界。
+
 ## 文档
 
 - [河南大学选课接口记录](docs/course-selection-api.md)
