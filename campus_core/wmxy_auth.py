@@ -33,6 +33,14 @@ class AuthError(Exception):
     pass
 
 
+class AuthNetworkError(AuthError):
+    pass
+
+
+class AuthCredentialsError(AuthError):
+    pass
+
+
 @dataclass(frozen=True)
 class CampusSession:
     key: str
@@ -68,20 +76,26 @@ def exchange_secret(http: httpx.Client, *, root: str = AUTH_ROOT) -> CampusSessi
     try:
         response = http.post(root + "cam_iface46/exchangeSecretkey.action", content=body,
                              headers={"Content-Type": "application/text"})
+    except httpx.DecodingError:
+        raise AuthError("密钥交换响应无法解码。") from None
     except httpx.RequestError:
-        raise AuthError("无法连接完美校园登录接口。") from None
+        raise AuthNetworkError("无法连接完美校园登录接口。") from None
     if response.status_code != 200:
         raise AuthError(f"密钥交换返回 HTTP {response.status_code}。")
-    ciphertext = base64.b64decode(response.content)
-    plain = b"".join(
-        private_key.decrypt(ciphertext[start:start + RSA_BLOCK], padding.PKCS1v15())
-        for start in range(0, len(ciphertext), RSA_BLOCK)
-    )
     try:
+        ciphertext = base64.b64decode(response.content)
+        plain = b"".join(
+            private_key.decrypt(ciphertext[start:start + RSA_BLOCK], padding.PKCS1v15())
+            for start in range(0, len(ciphertext), RSA_BLOCK)
+        )
         data = json.loads(plain)
-        return CampusSession(str(data["key"]), str(data["session"]))
-    except (ValueError, KeyError):
+    except ValueError:
         raise AuthError("密钥交换响应无法解析。") from None
+    if not isinstance(data, dict) or any(
+        not isinstance(data.get(field), str) or not data[field].strip() for field in ("key", "session")
+    ):
+        raise AuthError("密钥交换响应缺少有效数据。")
+    return CampusSession(data["key"], data["session"])
 
 
 def _envelope(inner: dict, session: CampusSession) -> tuple[bytes, str]:
@@ -100,16 +114,22 @@ def _open(response: httpx.Response, session: CampusSession) -> dict:
         outer = response.json()
     except ValueError:
         raise AuthError("登录响应无法解析。") from None
+    if not isinstance(outer, dict):
+        raise AuthError("登录响应不是 JSON 对象。")
     # 实测外层键为 code_/message_/result_；内层 data 仅在成功时出现。
     code = outer.get("code_", outer.get("code"))
     result = outer.get("result_", outer.get("result"))
-    message = outer.get("message_", outer.get("message"))
     if str(code or "0") != "0" or result is False:
-        raise AuthError(f"{message or '登录失败。'}（code {code}）")
+        if str(code) == "100600":
+            raise AuthCredentialsError("完美校园登录态已失效（code 100600）。")
+        raise AuthError("完美校园未接受本次登录请求。")
     try:
-        return json.loads(_des(base64.b64decode(outer["data"]), session.key, decrypt=True).decode("utf-8"))
-    except (ValueError, KeyError):
+        data = json.loads(_des(base64.b64decode(outer["data"]), session.key, decrypt=True).decode("utf-8"))
+    except (ValueError, KeyError, TypeError):
         raise AuthError("登录响应缺少有效数据。") from None
+    if not isinstance(data, dict) or not isinstance(data.get("user"), dict):
+        raise AuthError("登录响应缺少有效用户对象。")
+    return data["user"]
 
 
 def _post_login(http: httpx.Client, session: CampusSession, inner: dict, *, root: str = AUTH_ROOT) -> dict:
@@ -117,8 +137,10 @@ def _post_login(http: httpx.Client, session: CampusSession, inner: dict, *, root
     try:
         response = http.post(root + "cam_iface46/loginnew.action", content=body,
                              headers={"Content-Type": "application/text", "campusSign": sign})
+    except httpx.DecodingError:
+        raise AuthError("登录响应无法解码。") from None
     except httpx.RequestError:
-        raise AuthError("无法连接完美校园登录接口。") from None
+        raise AuthNetworkError("无法连接完美校园登录接口。") from None
     return _open(response, session)
 
 
@@ -139,6 +161,8 @@ def _post_enveloped(http: httpx.Client, session: CampusSession, method: str, inn
         outer = response.json()
     except ValueError:
         raise AuthError("接口响应无法解析。") from None
+    if not isinstance(outer, dict):
+        raise AuthError("接口响应不是 JSON 对象。")
     code = outer.get("code_", outer.get("code"))
     if str(code or "0") != "0" and outer.get("result_", outer.get("result")) is not True:
         raise AuthError(f"{outer.get('message_') or outer.get('message') or '接口失败。'}（code {code}）")
@@ -169,7 +193,7 @@ def login_password(http: httpx.Client, *, account: str, password: str, session: 
         **_device_fields(device), "type": "1", "userName": account,
         "password": [_android_b64(_des(char.encode("utf-8"), session.key)) for char in password],
     }
-    return _post_login(http, session, inner).get("user") or {}
+    return _post_login(http, session, inner)
 
 
 def login_token(http: httpx.Client, *, user_id: str, user_name: str, token: str, session: CampusSession,
@@ -179,7 +203,7 @@ def login_token(http: httpx.Client, *, user_id: str, user_name: str, token: str,
         raise AuthError("续期需要 token、userId 和 userName。")
     inner = {**_device_fields(device), "type": "3", "userId": str(user_id),
              "userName": user_name, "token": token}
-    return _post_login(http, session, inner).get("user") or {}
+    return _post_login(http, session, inner)
 
 
 SMS_SEND_METHOD = "cam_iface46/gainMatrixCaptcha543.action"
@@ -202,7 +226,7 @@ def login_sms(http: httpx.Client, *, mobile: str, code: str, session: CampusSess
     if not mobile.strip() or not code.strip():
         raise AuthError("需要手机号和验证码。")
     inner = {**_device_fields(device), "type": "2", "userName": mobile.strip(), "sms": code.strip()}
-    return _post_login(http, session, inner).get("user") or {}
+    return _post_login(http, session, inner)
 
 
 def login_and_refresh(http: httpx.Client, *, token: str, user_id: str, user_name: str,

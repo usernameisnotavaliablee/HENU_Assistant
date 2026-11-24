@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import weakref
 from contextlib import contextmanager
 from pathlib import Path
@@ -34,31 +35,38 @@ def file_transaction(
     stale_after: float = 3600.0,
 ) -> Iterator[None]:
     """Serialize a read-modify-write domain across threads and processes."""
+    deadline = time.monotonic() + timeout
     lock_path = Path(f"{Path(target).resolve()}.lock")
+    held_paths = getattr(_TRANSACTION_STATE, "held_paths", None)
+    if held_paths is None:
+        held_paths = _TRANSACTION_STATE.held_paths = set()
+    if lock_path in held_paths:
+        yield
+        return
+
     process_lock = _process_lock(lock_path)
-    with process_lock:
-        depths = getattr(_TRANSACTION_STATE, "depths", None)
-        if depths is None:
-            depths = {}
-            _TRANSACTION_STATE.depths = depths
-        depth = int(depths.get(lock_path, 0))
-        if depth:
-            depths[lock_path] = depth + 1
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or not process_lock.acquire(timeout=remaining):
+        raise TimeoutError(f"file transaction lock timed out: {lock_path}")
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"file transaction lock timed out: {lock_path}")
+        lock = FileLock(lock_path, timeout=remaining, stale_after=stale_after)
+        if not lock.acquire():
+            raise TimeoutError(f"file transaction lock timed out: {lock_path}")
+        try:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"file transaction lock timed out: {lock_path}")
+            held_paths.add(lock_path)
             try:
                 yield
             finally:
-                depths[lock_path] = depth
-            return
-
-        lock = FileLock(lock_path, timeout=timeout, stale_after=stale_after)
-        if not lock.acquire():
-            raise TimeoutError(f"file transaction lock timed out: {lock_path}")
-        depths[lock_path] = 1
-        try:
-            yield
+                held_paths.remove(lock_path)
         finally:
-            depths.pop(lock_path, None)
             lock.release()
+    finally:
+        process_lock.release()
 
 
 def _fsync_directory(directory: Path) -> None:

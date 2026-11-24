@@ -29,7 +29,7 @@ def test_unknown_place_returns_candidates_without_floor_fetch():
     def handle(request):
         url = str(request.url).split("?", 1)[0]
         params = dict(request.url.params)
-        seen.append((url, params.get("optype")))
+        seen.append((url, params.get("optype"), params.get("areaid")))
         if url == ROOM_ACCESS:
             return httpx.Response(200, json={"businessData": {"useFlag": "1"}})
         assert url == ROOM_CATALOG
@@ -47,7 +47,8 @@ def test_unknown_place_returns_candidates_without_floor_fetch():
             query_address(http, "东区26 638", context=_context())
     candidates = exc_info.value.candidates
     assert candidates and candidates[0].command_text == "金明校区 东苑26 638"
-    assert not [item for item in seen if item[1] in ("3", "4")]
+    assert seen == [(ROOM_ACCESS, None, None), (ROOM_CATALOG, "1", "0"),
+                    (ROOM_CATALOG, "2", "c1"), (ROOM_CATALOG, "2", "c2")]
 
 
 def test_duplicate_meters_in_one_floor_cannot_be_disambiguated():

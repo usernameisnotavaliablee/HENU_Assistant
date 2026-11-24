@@ -14,6 +14,7 @@ from campus_core.wmxy_auth import (
     CHANGE_KEY_URL,
     IV,
     LOGIN_URL,
+    AuthCredentialsError,
     AuthError,
     exchange_secret,
     login_password,
@@ -114,8 +115,21 @@ def test_rotated_token_failure_surfaces_business_message():
     failure = {"code_": "100600", "result_": False, "message_": "登录失效，请重新登录"}
     with run(make_server({"token": "t"}, failure=failure)) as http:
         session = exchange_secret(http)
-        with pytest.raises(AuthError, match="100600"):
+        with pytest.raises(AuthCredentialsError, match="100600"):
             login_token(http, user_id="1", user_name="u", token="stale", session=session)
+
+
+@pytest.mark.parametrize("body", [
+    [None],
+    {"data": ["wrong type"]},
+    {"data": base64.b64encode(des(b"[]")).decode()},
+    {"data": base64.b64encode(des(b'{"user": ["wrong type"]}')).decode()},
+])
+def test_login_rejects_malformed_response(body):
+    with run(make_server(None, failure=body)) as http:
+        session = exchange_secret(http)
+        with pytest.raises(AuthError, match="登录响应"):
+            login_token(http, user_id="1", user_name="u", token="old", session=session)
 
 
 def test_device_id_is_always_sent():

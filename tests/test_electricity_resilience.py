@@ -51,6 +51,46 @@ def test_exchange_network_error_is_wrapped():
             _exchange_cookie(http, _context(), "session")
 
 
+@pytest.mark.parametrize(("failure", "message"), [
+    (None, "暂时连不上电费登录服务，请稍后再试。"),
+    ([], "电费登录服务返回异常，请稍后再试。"),
+    ({"code_": "100600", "result_": False}, "电费查询的登录态已失效，请联系管理员重新导入。"),
+])
+def test_renewal_failure_reaches_bot_without_overwriting_context(monkeypatch, tmp_path, failure, message):
+    import hashlib
+    import json
+
+    from campus_core import wmxy_auth
+    from campus_core.atomic_io import atomic_write_json
+    from henu_plugin.service import HenuPluginService
+
+    path = tmp_path / "context.json"
+    atomic_write_json(path, {**_context(), "session_id": "old-session", "login_token": "old-token",
+                             "user_id": "user", "login_name": "login", "device_id": "device"})
+    before = path.read_bytes()
+
+    def respond(request):
+        url = str(request.url).split("?", 1)[0]
+        if url == ROOM_ACCESS:
+            return httpx.Response(200, json={"returnmsg": "idserial为空"})
+        if url == PAY_EXCHANGE:
+            return httpx.Response(200, text="出错啦")
+        assert url == wmxy_auth.LOGIN_URL
+        if failure is None:
+            raise httpx.ConnectError("synthetic connection error", request=request)
+        body = json.dumps(failure).encode()
+        return httpx.Response(200, content=body, headers={"campusSign": hashlib.sha256(body).hexdigest()})
+
+    monkeypatch.setattr(wmxy_auth, "exchange_secret",
+                        lambda _: wmxy_auth.CampusSession("0123456789abcdef01234567", "fixture-session"))
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(transport=httpx.MockTransport(respond), **kw))
+    monkeypatch.setenv("HENU_ELECTRICITY_CONTEXT", str(path))
+    result = HenuPluginService(tmp_path)._electricity_query({"text": "东苑26 638"})
+    assert result == {"success": False, "msg": message}
+    assert path.read_bytes() == before
+
+
 def test_reimport_invalidates_directory_when_project_changes(monkeypatch, tmp_path):
     import io
     import json
@@ -160,6 +200,44 @@ def test_reimport_waits_for_refresh_and_keeps_latest_token(monkeypatch, tmp_path
         assert pending_import.result() == 0
     saved = json.loads(path.read_text())
     assert saved["cookie"] == "SESSION=imported" and saved["login_token"] == "new-token"
+
+
+def test_file_transaction_times_out_before_entering_busy_transaction(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from campus_core.atomic_io import file_transaction
+
+    path = tmp_path / "context.json"
+
+    def contend():
+        with file_transaction(path, timeout=0.01):
+            pytest.fail("超时的线程不能进入事务")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with file_transaction(path), file_transaction(path, timeout=0):
+            with pytest.raises(TimeoutError, match="file transaction lock timed out"):
+                pool.submit(contend).result(timeout=2)
+
+
+def test_file_transaction_passes_remaining_budget_to_file_lock(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from campus_core import atomic_io
+
+    process_lock = Mock()
+    clock = iter((10.0, 10.0, 10.75))
+    monkeypatch.setattr(atomic_io, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    monkeypatch.setattr(atomic_io, "_process_lock", lambda _: process_lock)
+    file_lock = Mock()
+    file_lock.return_value.acquire.return_value = False
+    monkeypatch.setattr(atomic_io, "FileLock", file_lock)
+    with pytest.raises(TimeoutError, match="file transaction lock timed out"):
+        with atomic_io.file_transaction(tmp_path / "context.json", timeout=1):
+            pytest.fail("超时的线程不能进入事务")
+    process_lock.acquire.assert_called_once_with(timeout=1)
+    process_lock.release.assert_called_once()
+    assert file_lock.call_args.kwargs["timeout"] == 0.25
 
 
 def test_request_budget_stops_later_requests_and_shrinks_timeout(monkeypatch, tmp_path):

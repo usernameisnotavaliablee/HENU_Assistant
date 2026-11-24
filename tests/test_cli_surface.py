@@ -38,6 +38,9 @@ def test_electricity_parser_keeps_dorm_text_and_help() -> None:
     assert inspect_cli_command("electricity").help_topic == "electricity"
     assert "help electricity" in build_help_payload("")["examples"]
     assert build_help_payload("electricity")["topic"] == "electricity"
+    for alias in ("电费", "电量"):
+        assert inspect_cli_command(f"help {alias}").help_topic == "electricity"
+        assert build_help_payload(alias) == build_help_payload("electricity")
 
 
 def test_empty_classroom_parser_forwards_rich_filters() -> None:

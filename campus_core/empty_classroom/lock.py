@@ -40,8 +40,8 @@ class FileLock:
 
     def acquire(self) -> bool:
         """尝试获取锁，超时返回 False。"""
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self._timeout
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
 
         while time.monotonic() < deadline:
             fd: int | None = None
@@ -59,7 +59,9 @@ class FileLock:
                         os.close(fd)
                     except OSError:
                         pass
-                time.sleep(0.05)
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(0.05, remaining))
 
         return False
 

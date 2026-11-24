@@ -2114,7 +2114,8 @@ def _error_spec(raw: str, message: str, *, help_topic: str) -> CliCommandSpec:
 
 
 def _normalize_topic(parts: Sequence[str]) -> str:
-    return " ".join(str(part).strip().lower() for part in parts if str(part).strip())
+    topic = " ".join(str(part).strip().lower() for part in parts if str(part).strip())
+    return "electricity" if topic in {"电费", "电量"} else topic
 
 
 def _parse_yuketang_options(

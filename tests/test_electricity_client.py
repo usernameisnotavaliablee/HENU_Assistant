@@ -277,7 +277,7 @@ def test_query_saved_retries_after_refresh(monkeypatch, tmp_path):
 
     context = tmp_path / "context.json"
     saved = {
-        "cookie": "SESSION=expired", "referer": REFERER,
+        "cookie": "SESSION=expired; sid=keep", "referer": REFERER,
         "schoolcode": "school", "payProId": "project", "businesstype": "electricity",
         "session_id": "campus-session", "custom_id": "817",
         "directory": [{
@@ -293,17 +293,23 @@ def test_query_saved_retries_after_refresh(monkeypatch, tmp_path):
         url = str(request.url).split("?", 1)[0]
         seen.append(url)
         if url == PAY_EXCHANGE and "token" in dict(request.url.params):
-            return httpx.Response(302, headers={"Set-Cookie": "SESSION=fresh; Path=/",
-                                                "Location": PAY_EXCHANGE + "?step=2"})
+            return httpx.Response(302, headers=[
+                ("Set-Cookie", "route=fixture; Path=/CloudPayment/user"),
+                ("Set-Cookie", "SESSION=fresh; Path=/"),
+                ("Location", PAY_EXCHANGE + "?step=2"),
+            ])
         if url == PAY_EXCHANGE:
             return httpx.Response(200, text="ok")
         if url == ROOM_ACCESS:
-            if "SESSION=fresh" not in request.headers["Cookie"]:
-                return httpx.Response(200, json={"returncode": "-600", "returnmsg": "idserial为空"})
-            return httpx.Response(200, json={"businessData": {"useFlag": "1"}})
+            cookie = request.headers["Cookie"]
+            if "SESSION=fresh" in cookie:
+                return httpx.Response(200, json={"businessData": {"useFlag": "1"}},
+                                      headers={"Set-Cookie": "SESSION=rotated; Path=/CloudPayment/user"})
+            if "SESSION=rotated" in cookie:
+                return httpx.Response(200, json={"businessData": {"useFlag": "1"}})
+            return httpx.Response(200, json={"returncode": "-600", "returnmsg": "idserial为空"})
         assert url == ROOM_STATE
-        if "SESSION=fresh" not in request.headers["Cookie"]:
-            return httpx.Response(401)
+        assert request.headers["Cookie"] == "sid=keep; route=fixture; SESSION=rotated"
         return success("7.5")(request)
 
     client = httpx.Client
@@ -311,7 +317,8 @@ def test_query_saved_retries_after_refresh(monkeypatch, tmp_path):
     outcomes = query_saved(context, {"campus": "金明", "building": "东苑26栋", "room": "638", "meter": "aircon"})
     assert [o["quantity"] for o in outcomes] == [Decimal("7.5")]
     stored = json.loads(context.read_text(encoding="utf-8"))
-    assert "SESSION=fresh" in stored["cookie"] and stored["session_id"] == "campus-session"
+    assert stored["cookie"] == "sid=keep; route=fixture; SESSION=rotated"
+    assert stored["session_id"] == "campus-session"
     assert seen.count(PAY_EXCHANGE) == 2
 
 
@@ -373,8 +380,8 @@ def test_refresh_falls_back_to_token_login(monkeypatch, tmp_path):
     assert "SESSION=fresh" in stored["cookie"]
 
 
-@pytest.mark.parametrize("status", [302, 200])
-def test_refresh_exchanges_session_id_for_paydo_cookie(monkeypatch, tmp_path, status):
+@pytest.mark.parametrize(("redirect", "accepted"), [(True, True), (True, False), (False, False)])
+def test_refresh_exchanges_session_id_for_paydo_cookie(monkeypatch, tmp_path, redirect, accepted):
     from campus_core.electricity_client import PAY_EXCHANGE, refresh_saved
 
     context = tmp_path / "context.json"
@@ -396,7 +403,7 @@ def test_refresh_exchanges_session_id_for_paydo_cookie(monkeypatch, tmp_path, st
             assert params["customerId"] == "817" and params["UAinfo"] == "wanxiao"
             assert request.headers["X-Requested-With"] == "com.newcapec.mobile.ncp"
             assert "SESSION=" not in request.headers["Cookie"]
-            if status != 302:
+            if not redirect:
                 return httpx.Response(200, headers={"Set-Cookie": "SESSION=anonymous; Path=/"}, text="出错啦")
             return httpx.Response(302, headers={
                 "Set-Cookie": "SESSION=fresh; Path=/", "Location": PAY_EXCHANGE + "?step=2"})
@@ -405,15 +412,16 @@ def test_refresh_exchanges_session_id_for_paydo_cookie(monkeypatch, tmp_path, st
             return httpx.Response(200, text="ok")
         assert url == ROOM_ACCESS
         assert request.headers["Cookie"] == "sid=encoded; SESSION=fresh"
-        return httpx.Response(200, json={"businessData": {"useFlag": "1"}})
+        body = {"businessData": {"useFlag": "1"}} if accepted else {"returnmsg": "idserial为空"}
+        return httpx.Response(200, json=body, headers={"Set-Cookie": "SESSION=after-probe; Path=/"})
 
     client = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(handle), **kwargs))
     report = refresh_saved(context)
-    assert report["recognized"] is (status == 302)
+    assert report["recognized"] is accepted
     stored = json.loads(context.read_text(encoding="utf-8"))
-    assert stored == ({**saved, "cookie": "sid=encoded; SESSION=fresh"} if status == 302 else saved)
-    assert seen == ([PAY_EXCHANGE, PAY_EXCHANGE, ROOM_ACCESS] if status == 302 else [PAY_EXCHANGE])
+    assert stored == ({**saved, "cookie": "sid=encoded; SESSION=after-probe"} if accepted else saved)
+    assert seen == ([PAY_EXCHANGE, PAY_EXCHANGE, ROOM_ACCESS] if redirect else [PAY_EXCHANGE])
 
 
 REFERER = ORIGIN + "/CloudPayment/bill/selectPayProject.do"

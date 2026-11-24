@@ -10,16 +10,18 @@ import stat
 import sys
 import time
 import tomllib
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from functools import cache, partial
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
 from .atomic_io import atomic_write_json, file_transaction
-from .wmxy_auth import AuthError, login_and_refresh
+from .wmxy_auth import AuthCredentialsError, AuthError, AuthNetworkError, login_and_refresh
 from .electricity_meter import (
     FloorDirectory, MeterAddress, MeterLookupError, RoomOption, _building_key, _campus_key, _floor, _normalize,
     _numbered_building,
@@ -231,21 +233,22 @@ def _level(http: httpx.Client, context: dict, optype: str, **parents: str) -> tu
     return _room_options(data.get("roomlist"))
 
 
-def _catalog(http: httpx.Client, context: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+def _catalog(catalog_level: Callable[..., tuple[RoomOption, ...]]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
     """只拉校区与楼栋，用于失败时的近似建议。"""
     aliases = _area_aliases()
     rows = []
-    for campus in _level(http, context, "1"):
-        for building in _level(http, context, "2", areaid=campus.id):
+    for campus in catalog_level("1"):
+        for building in catalog_level("2", areaid=campus.id):
             if _numbered_building(building.name) is None:
                 continue
             rows.append((campus.name, building.name, _building_aliases(campus.name, building.name, aliases)))
     return tuple(rows)
 
 
-def _official_directory(http: httpx.Client, address: dict | MeterAddress, context: dict) -> tuple[FloorDirectory, ...]:
+def _official_directory(http: httpx.Client, address: dict | MeterAddress, context: dict,
+                        catalog_level: Callable[..., tuple[RoomOption, ...]]) -> tuple[FloorDirectory, ...]:
     _room_access(http, context, context["cookie"])
-    campuses = _level(http, context, "1")
+    campuses = catalog_level("1")
     candidates = []
     if isinstance(address, MeterAddress):
         aliases = _area_aliases()
@@ -256,7 +259,7 @@ def _official_directory(http: httpx.Client, address: dict | MeterAddress, contex
         for campus in campuses:
             if scoped and _campus_key(campus.name) not in scoped:
                 continue
-            for building in _level(http, context, "2", areaid=campus.id):
+            for building in catalog_level("2", areaid=campus.id):
                 nicknames = _building_aliases(campus.name, building.name, aliases)
                 if address.matches_building(campus.name, building.name, nicknames):
                     candidates.append((campus, building, nicknames))
@@ -271,7 +274,7 @@ def _official_directory(http: httpx.Client, address: dict | MeterAddress, contex
         for campus in campuses:
             if _campus_key(campus.name) != campus_key:
                 continue
-            for building in _level(http, context, "2", areaid=campus.id):
+            for building in catalog_level("2", areaid=campus.id):
                 if _building_key(campus_key, building.name) == building_key:
                     candidates.append((campus, building, ()))
         requested_floor = address.get("floor")
@@ -332,11 +335,12 @@ def query_address(http: httpx.Client, address: dict | str | MeterAddress, *, con
 
     live = "directory" not in context
     directory: tuple[FloorDirectory, ...] = ()
+    catalog_level = cache(partial(_level, http, context))
     try:
         if isinstance(address, str):
             address = parse_meter_text(address)
         directory = (
-            _official_directory(http, address, context)
+            _official_directory(http, address, context, catalog_level)
             if live else _imported_directory(context["directory"], _area_aliases() if isinstance(address, MeterAddress) else {})
         )
         if isinstance(address, MeterAddress):
@@ -349,7 +353,7 @@ def query_address(http: httpx.Client, address: dict | str | MeterAddress, *, con
     except MeterLookupError as exc:
         candidates = exc.candidates
         if live and isinstance(address, MeterAddress) and exc.reason == "no_match" and not directory:
-            candidates = suggest_targets(_catalog(http, context), address)
+            candidates = suggest_targets(_catalog(catalog_level), address)
         raise ElectricityLookupError(str(exc), candidates) from None
     results = []
     for meter in meters:
@@ -557,7 +561,18 @@ def _exchange_cookie(http: httpx.Client, context: dict, session_id: str | None) 
     except ElectricityExpiredError:
         return report | {"recognized": False, "session_expired": True,
                          "reason": "换票后的会话未通过选房验证（HTTP 200）。"}
-    return report | {"recognized": True, "follow_status": page.status_code, "cookie": merged}
+    reading_request = httpx.Request("GET", ROOM_STATE)
+    http.cookies.set_cookie_header(reading_request)
+    verified_cookies = {}
+    for part in reading_request.headers.get("Cookie", "").split(";"):
+        name, sep, value = part.strip().partition("=")
+        if sep:
+            # 同名 Cookie 中，jar 会优先发送路径更具体的值。
+            verified_cookies.setdefault(name, value)
+    if not verified_cookies.get("SESSION"):
+        raise ElectricityProtocolError("选房验证后云缴费未保留可用会话，请稍后再试。")
+    return report | {"recognized": True, "follow_status": page.status_code,
+                     "cookie": _merge_cookie(base, verified_cookies)}
 
 
 def _login_device(context: dict) -> dict:
@@ -586,8 +601,12 @@ def refresh_saved(path: Path, *, deadline: float | None = None) -> dict:
                 session, user = login_and_refresh(
                     auth_http, token=context["login_token"], user_id=context["user_id"],
                     user_name=context["login_name"], device=_login_device(context))
+        except AuthNetworkError:
+            raise ElectricityNetworkError("暂时连不上电费登录服务，请稍后再试。") from None
+        except AuthCredentialsError:
+            return report | {"reason": "完美校园登录态已失效，请重新导入。"}
         except (AuthError, ValueError):
-            return report | {"recognized": False, "reason": "完美校园登录态续期失败。"}
+            raise ElectricityProtocolError("电费登录服务返回异常，请稍后再试。") from None
         # 续期会轮换 token，先落盘再换票。
         context = {**context, "login_token": str(user.get("token") or context["login_token"]),
                    "session_id": session.session,
@@ -606,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--context", type=Path, help="含有效授权会话及缴费项目的私有 JSON 文件")
     parser.add_argument("--import-curl", action="store_true", help="从标准输入的 getRoomState.do cURL 写入 --context")
-    parser.add_argument("--refresh", action="store_true", help="用上下文里的长寿命 Cookie 尝试换发新会话")
+    parser.add_argument("--refresh", action="store_true", help="先用校园会话换票，确认过期且有续期信息时再续期")
     parser.add_argument("--keep-renewal", action="store_true", help="重导入同一账号时保留原生续期信息")
     args = parser.parse_args(argv)
     if args.keep_renewal and (not args.import_curl or args.refresh):
